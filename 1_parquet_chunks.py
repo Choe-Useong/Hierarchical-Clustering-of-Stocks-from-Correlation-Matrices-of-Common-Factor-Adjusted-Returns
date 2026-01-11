@@ -2,7 +2,7 @@ import pandas as pd
 import re
 import os
 
-data = pd.read_excel(r"C:\Users\working\Desktop\주식클러스터\kospi_adj_stock_prices.xlsx", header = 8)
+data = pd.read_excel("kospi_adj_stock_prices.xlsx", header = 8)
 
 ITEM_COL = "Item Name "   # 뒤 공백 포함
 ID = ["Symbol", "Symbol Name", ITEM_COL]
@@ -32,3 +32,4 @@ path = r"items_parquet/item__수정주가(원).parquet"
 
 w = pd.read_parquet(path)
 print(w.iloc[:5, :5].to_string())
+
