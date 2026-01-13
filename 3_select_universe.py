@@ -5,7 +5,7 @@ import pandas as pd
 TOPN = 300
 MARKET = "유가증권시장"
 
-PATH_RET  = r"items_parquet/item__로그수익률.parquet"   # 너 수익률 파일(와이드)
+PATH_RET  = r"items_parquet/item__로그수익률.parquet"   # 수익률 파일(와이드)
 PATH_MKT  = r"items_parquet/item__거래소(시장).parquet"
 PATH_MCAP = r"items_parquet/item__시가총액 (보통-상장예정주식수 포함)(백만원).parquet"
 OUT_PATH  = r"ret_kospi_topN_yearmask.parquet"
@@ -64,3 +64,4 @@ out = out.dropna(axis=0, how="all")
 # 저장
 out.to_parquet(OUT_PATH, engine="pyarrow")
 print("saved:", OUT_PATH, "shape:", out.shape)
+
