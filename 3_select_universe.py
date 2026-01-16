@@ -2,104 +2,58 @@ import numpy as np
 import pandas as pd
 
 # ===== 설정 =====
-TOPN = 300
 MARKET = "유가증권시장"
+START = "2016-01-01"
+END   = "2024-12-31"
+TOP_PCT = 0.20  # 시총 상위 20%
 
-PATH_RET  = r"items_parquet/item__로그수익률.parquet"   # 수익률 파일(와이드)
+PATH_RET  = r"items_parquet/item__로그수익률.parquet"
 PATH_MKT  = r"items_parquet/item__거래소(시장).parquet"
 PATH_MCAP = r"items_parquet/item__시가총액 (보통-상장예정주식수 포함)(백만원).parquet"
-OUT_PATH  = r"ret_kospi_topN_yearmask.parquet"
+OUT_PATH  = r"ret_kospi_topPct_complete_period.parquet"
 
-# ===== 로드 =====
+# ===== 로드/정렬 =====
 ret  = pd.read_parquet(PATH_RET)
-mkt  = pd.read_parquet(PATH_MKT).ffill(axis=1)
-mcap = pd.read_parquet(PATH_MCAP).ffill(axis=1)
+mkt  = pd.read_parquet(PATH_MKT)
+mcap = pd.read_parquet(PATH_MCAP)
 
-# 날짜 컬럼 정리/정렬
-ret.columns  = pd.to_datetime(ret.columns,  errors="coerce")
-mkt.columns  = pd.to_datetime(mkt.columns,  errors="coerce")
-mcap.columns = pd.to_datetime(mcap.columns, errors="coerce")
+for df in (ret, mkt, mcap):
+    df.columns = pd.to_datetime(df.columns, errors="coerce")
+    df.sort_index(axis=1, inplace=True)
 
-ret  = ret.sort_index(axis=1)
-mkt  = mkt.sort_index(axis=1)
-mcap = mcap.sort_index(axis=1)
-
-# ret의 심볼 벡터(멀티인덱스면 0레벨)
 sym_vec = ret.index.get_level_values(0).astype(str) if isinstance(ret.index, pd.MultiIndex) else ret.index.astype(str)
 
-# 결과: 전부 NaN에서 시작
-out = ret.copy()
-out.iloc[:, :] = np.nan
+# ===== 분석기간 컬럼 =====
+START = pd.Timestamp(START)
+END   = pd.Timestamp(END)
+cols_period = ret.columns[(ret.columns >= START) & (ret.columns <= END)]
 
-# ===== 연도별: "연초(해당 연도 첫 거래일)" 기준 KOSPI & 시총 TopN만 남김 =====
-years = sorted(set(ret.columns.year))
+# ===== 기준일(ref_day): 분석기간 내에서 mkt/mcap 둘 다 있는 첫 날짜 =====
+ref_day = [d for d in cols_period if (d in mkt.columns) and (d in mcap.columns)][0]
 
-for y in years:
-    cols_y = ret.columns[ret.columns.year == y]
-    if len(cols_y) == 0:
-        continue
+# ===== KOSPI 필터 (ref_day 기준) =====
+mkt_ref = mkt[ref_day]
+kospi_idx = mkt_ref[mkt_ref == MARKET].index
 
-    first_day = cols_y.min()  # 그 해 첫 거래일(수익률 파일 기준)
+# ===== 시총 상위 TOP_PCT (ref_day 기준, KOSPI 내) =====
+mc_ref = pd.to_numeric(mcap[ref_day], errors="coerce").loc[kospi_idx].dropna()
+thr = mc_ref.quantile(1.0 - TOP_PCT)
+big_idx = mc_ref[mc_ref >= thr].index
 
-    # 거래소 필터(유가증권시장)
-    mkt_y = mkt[first_day] if first_day in mkt.columns else None
-    if mkt_y is None:
-        continue
-    kospi_idx = mkt_y[mkt_y == MARKET].index
+big_syms = set(big_idx.get_level_values(0).astype(str)) if isinstance(big_idx, pd.MultiIndex) else set(big_idx.astype(str))
+row_mask_big = sym_vec.isin(big_syms)
 
-    # 시총 TopN
-    mc_y = mcap[first_day] if first_day in mcap.columns else None
-    if mc_y is None:
-        continue
-    mc_y = pd.to_numeric(mc_y, errors="coerce").loc[kospi_idx].dropna()
-    top_syms = set((mc_y.sort_values(ascending=False).head(TOPN).index.get_level_values(0)).astype(str))
+# ===== 분석기간 결측 0개 종목만 =====
+ret_period = ret.loc[row_mask_big, cols_period]
+final_idx = ret_period.index[ret_period.notna().all(axis=1)]
 
-    # ret에서 해당 연도 날짜들에 대해 TopN만 값 채우기
-    row_mask = sym_vec.isin(top_syms)
-    out.loc[row_mask, cols_y] = ret.loc[row_mask, cols_y]
 
-# 전기간 전부 NaN인 종목 제거(선택)
-out = out.dropna(axis=0, how="all")
 
-# 저장
+# ===== 저장: 분석기간만 =====
+out = ret.loc[final_idx, cols_period]
 out.to_parquet(OUT_PATH, engine="pyarrow")
-print("saved:", OUT_PATH, "shape:", out.shape)
+print("saved:", OUT_PATH, "shape:", out.shape, "ref_day:", ref_day.date())
 
-
-
-'''
-# ===== 월별: "월말(해당 월 마지막 거래일)" 기준 KOSPI & 시총 TopN만 남김 =====
-months = sorted(set(ret.columns.to_period("M")))
-
-for m in months:
-    cols_m = ret.columns[ret.columns.to_period("M") == m]
-    if len(cols_m) == 0:
-        continue
-
-    month_end = cols_m.max()  # 그 달 마지막 거래일(수익률 파일 기준)
-
-    # 거래소 필터(유가증권시장) - month_end 컬럼이 없으면 스킵(원하면 이전 최근일로 보정 가능)
-    mkt_m = mkt[month_end] if month_end in mkt.columns else None
-    if mkt_m is None:
-        continue
-    kospi_idx = mkt_m[mkt_m == MARKET].index
-
-    # 시총 TopN
-    mc_m = mcap[month_end] if month_end in mcap.columns else None
-    if mc_m is None:
-        continue
-    mc_m = pd.to_numeric(mc_m, errors="coerce").loc[kospi_idx].dropna()
-    top_syms = set(
-        mc_m.sort_values(ascending=False)
-            .head(TOPN)
-            .index.get_level_values(0)
-            .astype(str)
-    )
-
-    # ret에서 해당 월 날짜들에 대해 TopN만 값 채우기
-    row_mask = sym_vec.isin(top_syms)
-    out.loc[row_mask, cols_m] = ret.loc[row_mask, cols_m]
-
-# 전기간 전부 NaN인 종목 제거(선택)
-out = out.dropna(axis=0, how="all")
-'''
+print(out.shape, out.columns.min().date(), out.columns.max().date(), out.isna().sum().sum())
+print(ret_period.shape[0])  # 결측 0개 필터 전: KOSPI+시총상위% 통과 종목 수
+print(ret_period.notna().any(axis=1).sum())  # 분석기간 내 관측 1개 이상 있는 종목 수
