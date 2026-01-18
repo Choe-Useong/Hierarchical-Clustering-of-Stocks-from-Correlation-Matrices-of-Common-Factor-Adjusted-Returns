@@ -3,9 +3,9 @@ import pandas as pd
 
 # ===== 설정 =====
 MARKET = "유가증권시장"
-START = "2016-01-01"
-END   = "2024-12-31"
-TOP_PCT = 0.20  # 시총 상위 20%
+START = "2017-01-01"
+END   = "2025-12-31"
+TOP_PCT = 0.5  # 시총 상위
 
 PATH_RET  = r"items_parquet/item__로그수익률.parquet"
 PATH_MKT  = r"items_parquet/item__거래소(시장).parquet"
@@ -45,8 +45,11 @@ row_mask_big = sym_vec.isin(big_syms)
 
 # ===== 분석기간 결측 0개 종목만 =====
 ret_period = ret.loc[row_mask_big, cols_period]
-final_idx = ret_period.index[ret_period.notna().all(axis=1)]
+nobs = ret_period.notna().sum(axis=1)
+#final_idx = ret_period.index[nobs >= 2000]          # 예: 2940일 중 2000일 이상 관측
 
+miss_rate = ret_period.isna().mean(axis=1)          # 종목별 결측 비율
+final_idx = ret_period.index[miss_rate <= 0.2]      # 예: 결측 20% 이하면 유지
 
 
 # ===== 저장: 분석기간만 =====
