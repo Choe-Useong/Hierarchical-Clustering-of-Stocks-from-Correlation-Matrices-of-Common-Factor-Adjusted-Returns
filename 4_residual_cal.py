@@ -33,37 +33,50 @@ rm  = rm.loc[common]
 rm = rm.dropna()
 ret = ret.loc[:, rm.index]
 
-# 3) CAPM 잔차 + alpha/beta (벡터화)
-def capm_resid_alpha_beta(R, rm_w):
-    ok_t = rm_w.notna().values
-    R = R.iloc[:, ok_t]
-    rm_w = rm_w.iloc[ok_t]
+def capm_resid_alpha_beta_resid0(R, rm_w, min_obs=60):
+    # 날짜 교집합
+    common = R.columns.intersection(rm_w.index)
+    R = R.loc[:, common]
+    m = rm_w.loc[common]
 
-    keep = R.notna().all(axis=1)
-    R = R.loc[keep]
-    if R.shape[0] == 0:
-        return R, pd.DataFrame(columns=["alpha","beta"])
+    # 결과: 원래 종목/날짜 유지
+    resid_df = pd.DataFrame(0.0, index=R.index, columns=common)  # 기본 0 (결측 잔차=0)
+    param_df = pd.DataFrame(np.nan, index=R.index, columns=["alpha", "beta", "nobs"])
 
-    m = rm_w.values
-    m_mean = m.mean()
-    m_dm = m - m_mean
-    var_m = (m_dm @ m_dm) / len(m_dm)
+    m_all = m.values
+    ok_m = np.isfinite(m_all)
 
-    X = R.values
-    X_mean = X.mean(axis=1, keepdims=True)
-    X_dm = X - X_mean
+    for sym in R.index:
+        x = R.loc[sym].values
+        ok = np.isfinite(x) & ok_m
+        n = int(ok.sum())
+        if n < min_obs:
+            continue
 
-    cov = (X_dm @ m_dm) / len(m_dm)
-    beta = cov / var_m
-    alpha = X_mean[:, 0] - beta * m_mean
+        xi = x[ok]
+        mi = m_all[ok]
 
-    resid = X - alpha[:, None] - beta[:, None] * m[None, :]
+        m_mean = mi.mean()
+        m_dm = mi - m_mean
+        var_m = (m_dm @ m_dm) / n
+        if var_m == 0 or not np.isfinite(var_m):
+            continue
 
-    resid_df = pd.DataFrame(resid, index=R.index, columns=R.columns)
-    param_df = pd.DataFrame({"alpha": alpha, "beta": beta}, index=R.index)
+        x_mean = xi.mean()
+        cov = ((xi - x_mean) @ m_dm) / n
+        beta = cov / var_m
+        alpha = x_mean - beta * m_mean
+
+        # 관측된 날의 잔차만 계산해서 채움 (결측날은 이미 0)
+        r = xi - alpha - beta * mi
+        resid_df.loc[sym, np.array(common)[ok]] = r
+        param_df.loc[sym] = [alpha, beta, n]
+
     return resid_df, param_df
 
-resid, param = capm_resid_alpha_beta(ret, rm)
+# 사용
+resid, param = capm_resid_alpha_beta_resid0(ret, rm, min_obs=60)
+
 
 # 4) 저장
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -72,3 +85,24 @@ param.to_parquet(os.path.join(OUT_DIR, OUT_PARAM), engine="pyarrow")
 
 print("resid:", resid.shape, "NaN:", int(resid.isna().sum().sum()))
 print("param:", param.shape)
+
+
+
+
+# === 원수익률 결측만 CAPM으로 채움 ===
+common = ret.columns.intersection(rm.index)
+rm_c = rm.loc[common]
+
+alpha = param["alpha"].values[:, None]   # (N,1)
+beta  = param["beta"].values[:, None]    # (N,1)
+
+Rhat = alpha + beta * rm_c.values[None, :]  # (N,T)
+Rhat_df = pd.DataFrame(Rhat, index=ret.index, columns=common)
+
+ret_fill = ret.loc[:, common].copy()
+ret_fill = ret_fill.combine_first(Rhat_df)  # ret의 NaN만 Rhat로 채움
+
+print("ret_fill:", ret_fill.shape, "NaN:", int(ret_fill.isna().sum().sum()))
+
+# 저장
+ret_fill.to_parquet(os.path.join(OUT_DIR, "ret_capmfill_fullperiod.parquet"), engine="pyarrow")
