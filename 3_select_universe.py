@@ -3,9 +3,9 @@ import pandas as pd
 
 # ===== 설정 =====
 MARKET = "유가증권시장"
-START = "2017-01-01"
+START = "2015-01-01"
 END   = "2025-12-31"
-TOP_PCT = 0.5  # 시총 상위
+TOP_PCT = 1  # 시총 상위
 
 PATH_RET  = r"items_parquet/item__로그수익률.parquet"
 PATH_MKT  = r"items_parquet/item__거래소(시장).parquet"
