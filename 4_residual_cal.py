@@ -1,82 +1,81 @@
 import os
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
-RET_PATH = r"ret_kospi_topPct_complete_period.parquet"
-OUT_DIR  = r"resid_fullperiod"
-OUT_RESID = r"resid_capm_fullperiod.parquet"
-OUT_PARAM = r"capm_alpha_beta_fullperiod.parquet"
+RET_PATH  = r"ret_kospi_topPct_complete_period.parquet"
+FF_PATH   = r"C:\Users\working\Desktop\주식클러스터\items_parquet\ff_sheet1.parquet"
 
-KOSPI_TICKER = "^KS11"
+OUT_DIR   = r"resid_fullperiod"
+OUT_RESID = r"resid_ff3_fullperiod.parquet"
+OUT_PARAM = r"ff3_alpha_beta_fullperiod.parquet"
+OUT_FILL  = r"ret_ff3fill_fullperiod.parquet"
 
 # 1) ret
 ret = pd.read_parquet(RET_PATH)
 ret.columns = pd.to_datetime(ret.columns, errors="coerce")
 ret = ret.sort_index(axis=1)
 
-# 2) rm (KOSPI 지수) + 날짜 교집합 정합
-start = ret.columns.min().strftime("%Y-%m-%d")
-end   = (ret.columns.max() + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
+# 2) FF3 요인(F) 생성: (모두 "지수/레벨"이라고 가정 -> 로그차분)
+ff = pd.read_parquet(FF_PATH)
+ff["date"] = pd.to_datetime(ff["Symbol Name"], errors="coerce")
+ff = ff.dropna(subset=["date"]).set_index("date").sort_index()
 
+rm  = np.log(pd.to_numeric(ff["코스피"], errors="coerce")).diff()
+smb = np.log(pd.to_numeric(ff["Size & Book Value(2X3) SMB"], errors="coerce")).diff()
+hml = np.log(pd.to_numeric(ff["Size & Book Value(2X3) HML"], errors="coerce")).diff()
 
-px = yf.download(KOSPI_TICKER, start=start, end=end, auto_adjust=True, progress=False)[["Close"]]
-px.index = pd.to_datetime(px.index)
-px = px.droplevel(0, axis=1).squeeze()
+F = pd.concat([rm.rename("rm"), smb.rename("SMB"), hml.rename("HML")], axis=1).dropna()
 
-rm = np.log(px).diff()
-rm.name = "rm"
-
-common = ret.columns.intersection(rm.index)
+# 3) 날짜 교집합 정합
+common = ret.columns.intersection(F.index)
 ret = ret.loc[:, common]
-rm  = rm.loc[common]
-rm = rm.dropna()
-ret = ret.loc[:, rm.index]
+F   = F.loc[common]
+F   = F.dropna()
+ret = ret.loc[:, F.index]
 
-def capm_resid_alpha_beta_resid0(R, rm_w, min_obs=60):
+def ff3_resid_alpha_beta_resid0(R, F_w, min_obs=60):
     # 날짜 교집합
-    common = R.columns.intersection(rm_w.index)
+    common = R.columns.intersection(F_w.index)
     R = R.loc[:, common]
-    m = rm_w.loc[common]
+    F = F_w.loc[common]  # (T, K)
 
     # 결과: 원래 종목/날짜 유지
     resid_df = pd.DataFrame(0.0, index=R.index, columns=common)  # 기본 0 (결측 잔차=0)
-    param_df = pd.DataFrame(np.nan, index=R.index, columns=["alpha", "beta", "nobs"])
 
-    m_all = m.values
-    ok_m = np.isfinite(m_all)
+    K = F.shape[1]
+    beta_cols = ["alpha"] + [f"beta_{c}" for c in F.columns] + ["nobs"]
+    param_df = pd.DataFrame(np.nan, index=R.index, columns=beta_cols)
+
+    Farr = F.values
+    okF_all = np.all(np.isfinite(Farr), axis=1)  # (T,)
 
     for sym in R.index:
-        x = R.loc[sym].values
-        ok = np.isfinite(x) & ok_m
+        x = R.loc[sym].values  # (T,)
+        ok = np.isfinite(x) & okF_all
         n = int(ok.sum())
         if n < min_obs:
             continue
 
-        xi = x[ok]
-        mi = m_all[ok]
+        y = x[ok]                  # (n,)
+        X = Farr[ok, :]             # (n, K)
+        X = np.column_stack([np.ones(n), X])  # (n, K+1)
 
-        m_mean = mi.mean()
-        m_dm = mi - m_mean
-        var_m = (m_dm @ m_dm) / n
-        if var_m == 0 or not np.isfinite(var_m):
-            continue
+        # OLS (안정적으로 lstsq)
+        b, *_ = np.linalg.lstsq(X, y, rcond=None)  # (K+1,)
+        alpha = float(b[0])
+        betas = b[1:].astype(float)
 
-        x_mean = xi.mean()
-        cov = ((xi - x_mean) @ m_dm) / n
-        beta = cov / var_m
-        alpha = x_mean - beta * m_mean
-
-        # 관측된 날의 잔차만 계산해서 채움 (결측날은 이미 0)
-        r = xi - alpha - beta * mi
+        # 잔차(관측된 날만 채움)
+        yhat = X @ b
+        r = y - yhat
         resid_df.loc[sym, np.array(common)[ok]] = r
-        param_df.loc[sym] = [alpha, beta, n]
+
+        param_df.loc[sym, :] = [alpha, *betas.tolist(), n]
 
     return resid_df, param_df
 
 # 사용
-resid, param = capm_resid_alpha_beta_resid0(ret, rm, min_obs=60)
-
+resid, param = ff3_resid_alpha_beta_resid0(ret, F, min_obs=60)
 
 # 4) 저장
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -86,23 +85,24 @@ param.to_parquet(os.path.join(OUT_DIR, OUT_PARAM), engine="pyarrow")
 print("resid:", resid.shape, "NaN:", int(resid.isna().sum().sum()))
 print("param:", param.shape)
 
+# === 원수익률 결측만 FF3로 채움 ===
+common = ret.columns.intersection(F.index)
+F_c = F.loc[common].dropna()
+ret_c = ret.loc[:, F_c.index]
 
+alpha = param["alpha"].values[:, None]  # (N,1)
 
+B = np.column_stack([
+    param[f"beta_{c}"].values for c in F_c.columns
+])  # (N,K)
 
-# === 원수익률 결측만 CAPM으로 채움 ===
-common = ret.columns.intersection(rm.index)
-rm_c = rm.loc[common]
+Rhat = alpha + (B @ F_c.values.T)  # (N,T)
+Rhat_df = pd.DataFrame(Rhat, index=ret.index, columns=F_c.index)
 
-alpha = param["alpha"].values[:, None]   # (N,1)
-beta  = param["beta"].values[:, None]    # (N,1)
-
-Rhat = alpha + beta * rm_c.values[None, :]  # (N,T)
-Rhat_df = pd.DataFrame(Rhat, index=ret.index, columns=common)
-
-ret_fill = ret.loc[:, common].copy()
-ret_fill = ret_fill.combine_first(Rhat_df)  # ret의 NaN만 Rhat로 채움
+ret_fill = ret_c.copy()
+ret_fill = ret_fill.combine_first(Rhat_df)  # ret의 NaN만 예측치로 채움
 
 print("ret_fill:", ret_fill.shape, "NaN:", int(ret_fill.isna().sum().sum()))
 
 # 저장
-ret_fill.to_parquet(os.path.join(OUT_DIR, "ret_capmfill_fullperiod.parquet"), engine="pyarrow")
+ret_fill.to_parquet(os.path.join(OUT_DIR, OUT_FILL), engine="pyarrow")
