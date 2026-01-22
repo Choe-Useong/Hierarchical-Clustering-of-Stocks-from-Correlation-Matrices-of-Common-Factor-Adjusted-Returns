@@ -5,7 +5,11 @@ import pandas as pd
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import linkage, fcluster
 
-from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score, silhouette_score
+from sklearn.metrics import (
+    adjusted_rand_score,
+    adjusted_mutual_info_score,
+    silhouette_score,
+)
 
 # ================= 설정 =================
 BASE_DIR   = r"resid_fullperiod"
@@ -13,12 +17,15 @@ PATH_FF3   = os.path.join(BASE_DIR, "resid_ff3_fullperiod.parquet")  # (N,T)
 
 BASE_ITEMS = r"items_parquet"
 FILES = [
-    os.path.join(BASE_ITEMS, "ff_item__FnGuide Sector.parquet"), 
+    os.path.join(BASE_ITEMS, "ff_item__FnGuide Sector.parquet"),
     os.path.join(BASE_ITEMS, "ff_item__FnGuide Industry Group.parquet"),
     os.path.join(BASE_ITEMS, "ff_item__FnGuide Industry.parquet"),
+    os.path.join(BASE_ITEMS, "item__한국표준산업분류11차(대분류).parquet"),
+    os.path.join(BASE_ITEMS, "item__한국표준산업분류11차(중분류).parquet"),
+    os.path.join(BASE_ITEMS, "item__한국표준산업분류11차(소분류).parquet"),
 ]
 
-LINK = "ward" 
+LINK = "ward"
 
 # ================= FF3 로드 =================
 ff3 = pd.read_parquet(PATH_FF3).dropna(axis=1)
@@ -27,7 +34,7 @@ ff3.index = (ff3.index.get_level_values(0) if isinstance(ff3.index, pd.MultiInde
 rows = []
 
 for f in FILES:
-    name = os.path.basename(f).replace("item__", "").replace(".parquet", "")
+    name = os.path.basename(f).replace("ff_item__", "").replace("item__", "").replace(".parquet", "")
 
     ind_df = pd.read_parquet(f)
     ind_df.index = (ind_df.index.get_level_values(0) if isinstance(ind_df.index, pd.MultiIndex) else ind_df.index).astype(str)
@@ -48,17 +55,26 @@ for f in FILES:
     if n < 3 or K < 2:
         rows.append({
             "level": name, "n": n, "K": K,
-            "sil_ward": np.nan, "sil_industry": np.nan,
-            "ARI": np.nan, "NMI": np.nan, "VI": np.nan,
-            "d_sil(ward-ind)": np.nan
+            "ARI": np.nan, "AMI": np.nan, "Purity": np.nan,
+            "sil_cluster": np.nan, "sil_benchmark": np.nan,
+            "Δsil": np.nan
         })
         continue
     if K >= n:
         K = n - 1
 
     # 이 레벨에 해당하는 종목만
-    X = ff3.loc[common].dropna(axis=1)  # 날짜축에서 NaN 포함 열 제거(골자 유지)
+    X = ff3.loc[common].dropna(axis=1)
     XA = X.to_numpy(float)
+
+    if XA.shape[1] < 2:
+        rows.append({
+            "level": name, "n": n, "K": K,
+            "ARI": np.nan, "AMI": np.nan, "Purity": np.nan,
+            "sil_cluster": np.nan, "sil_benchmark": np.nan,
+            "Δsil": np.nan
+        })
+        continue
 
     # corr -> dist
     C = np.corrcoef(XA)
@@ -75,40 +91,31 @@ for f in FILES:
     # 업종 라벨 인코딩(0..G-1)
     _, labI = np.unique(ind_c.values, return_inverse=True)
 
-    # silhouette
-    silW = silhouette_score(D, labW, metric="precomputed") if len(np.unique(labW)) > 1 else np.nan
-    silI = silhouette_score(D, labI, metric="precomputed") if len(np.unique(labI)) > 1 else np.nan
+    # silhouette (same D)
+    silC = silhouette_score(D, labW, metric="precomputed") if len(np.unique(labW)) > 1 else np.nan
+    silB = silhouette_score(D, labI, metric="precomputed") if len(np.unique(labI)) > 1 else np.nan
 
-    # ARI/NMI
+    # 외부지표: ARI / AMI
     ari = adjusted_rand_score(labI, labW)
-    nmi = normalized_mutual_info_score(labI, labW)
+    ami = adjusted_mutual_info_score(labI, labW)
 
-    # VI
-    u1, inv1 = np.unique(labI, return_inverse=True)
-    u2, inv2 = np.unique(labW, return_inverse=True)
+    # Purity(보조): discovered cluster 기준으로 dominant benchmark label
+    u1, inv1 = np.unique(labI, return_inverse=True)  # true (benchmark)
+    u2, inv2 = np.unique(labW, return_inverse=True)  # pred (cluster)
     M = np.zeros((len(u1), len(u2)), dtype=np.int64)
     np.add.at(M, (inv1, inv2), 1)
-
-    Ntot = M.sum()
-    Pxy = M / Ntot
-    Px = Pxy.sum(axis=1, keepdims=True)
-    Py = Pxy.sum(axis=0, keepdims=True)
-    eps = 1e-12
-    Hx = -np.sum(Px * np.log(Px + eps))
-    Hy = -np.sum(Py * np.log(Py + eps))
-    I  = np.sum(Pxy * (np.log(Pxy + eps) - np.log(Px + eps) - np.log(Py + eps)))
-    vi = float(Hx + Hy - 2.0 * I)
+    purity = float(M.max(axis=0).sum() / M.sum()) if M.sum() > 0 else np.nan
 
     rows.append({
         "level": name,
         "n": n,
         "K": K,
-        "sil_ward": silW,
-        "sil_industry": silI,
         "ARI": ari,
-        "NMI": nmi,
-        "VI": vi,
-        "d_sil(ward-ind)": (silW - silI) if np.isfinite(silW) and np.isfinite(silI) else np.nan
+        "AMI": ami,
+        "Purity": purity,
+        "sil_cluster": silC,
+        "sil_benchmark": silB,
+        "Δsil": (silC - silB) if np.isfinite(silC) and np.isfinite(silB) else np.nan
     })
 
 res = pd.DataFrame(rows)
