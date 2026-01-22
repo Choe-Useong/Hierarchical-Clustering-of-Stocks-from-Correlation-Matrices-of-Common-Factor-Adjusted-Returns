@@ -3,8 +3,8 @@ import pandas as pd
 
 # ===== 설정 =====
 MARKET = "유가증권시장"
-START = "2015-01-01"
-END   = "2025-12-31"
+START = "2020-03-11"
+END   = "2026-01-06"
 TOP_PCT = 1  # 시총 상위
 
 PATH_RET  = r"items_parquet/item__로그수익률.parquet"
@@ -24,9 +24,22 @@ for df in (ret, mkt, mcap):
 sym_vec = ret.index.get_level_values(0).astype(str) if isinstance(ret.index, pd.MultiIndex) else ret.index.astype(str)
 
 # ===== 분석기간 컬럼 =====
+# ===== 분석기간 컬럼: (START~END) 길이 L의 2배로 전체구간 =====
 START = pd.Timestamp(START)
 END   = pd.Timestamp(END)
-cols_period = ret.columns[(ret.columns >= START) & (ret.columns <= END)]
+
+cols = pd.DatetimeIndex(ret.columns).sort_values()
+END  = cols[cols.searchsorted(END, side="right") - 1]
+START = cols[cols.searchsorted(START, side="left")]
+
+L = ((cols >= START) & (cols <= END)).sum()
+START2 = cols[max(0, cols.searchsorted(START) - L)]
+
+cols_period = cols[(cols >= START2) & (cols <= END)]
+
+print("START2:", START2.date(), "START:", START.date(), "END:", END.date())
+print("L(post):", L, "total:", len(cols_period))
+print("pre_len:", (cols_period < START).sum(), "post_len:", (cols_period >= START).sum())
 
 # ===== 기준일(ref_day): 분석기간 내에서 mkt/mcap 둘 다 있는 첫 날짜 =====
 ref_day = [d for d in cols_period if (d in mkt.columns) and (d in mcap.columns)][0]
