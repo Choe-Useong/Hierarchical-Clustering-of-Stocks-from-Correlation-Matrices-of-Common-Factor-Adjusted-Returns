@@ -6,6 +6,7 @@ MARKET = "유가증권시장"
 START = "2020-03-11"
 END   = "2026-01-06"
 TOP_PCT = 1  # 시총 상위
+DO_DOUBLE = False
 
 PATH_RET  = r"items_parquet/item__로그수익률.parquet"
 PATH_MKT  = r"items_parquet/item__거래소(시장).parquet"
@@ -25,6 +26,8 @@ sym_vec = ret.index.get_level_values(0).astype(str) if isinstance(ret.index, pd.
 
 # ===== 분석기간 컬럼 =====
 # ===== 분석기간 컬럼: (START~END) 길이 L의 2배로 전체구간 =====
+# ===== 분석기간 컬럼 =====
+# True면 (START~END 길이 L)만큼 START 이전으로 확장, False면 START~END만 사용
 START = pd.Timestamp(START)
 END   = pd.Timestamp(END)
 
@@ -32,14 +35,18 @@ cols = pd.DatetimeIndex(ret.columns).sort_values()
 END  = cols[cols.searchsorted(END, side="right") - 1]
 START = cols[cols.searchsorted(START, side="left")]
 
-L = ((cols >= START) & (cols <= END)).sum()
-START2 = cols[max(0, cols.searchsorted(START) - L)]
+if DO_DOUBLE:
+    L = ((cols >= START) & (cols <= END)).sum()
+    START2 = cols[max(0, cols.searchsorted(START) - L)]
+else:
+    START2 = START
 
 cols_period = cols[(cols >= START2) & (cols <= END)]
 
 print("START2:", START2.date(), "START:", START.date(), "END:", END.date())
-print("L(post):", L, "total:", len(cols_period))
-print("pre_len:", (cols_period < START).sum(), "post_len:", (cols_period >= START).sum())
+print("total:", len(cols_period),
+      "pre_len:", (cols_period < START).sum(),
+      "post_len:", (cols_period >= START).sum())
 
 # ===== 기준일(ref_day): 분석기간 내에서 mkt/mcap 둘 다 있는 첫 날짜 =====
 ref_day = [d for d in cols_period if (d in mkt.columns) and (d in mcap.columns)][0]
@@ -56,13 +63,13 @@ big_idx = mc_ref[mc_ref >= thr].index
 big_syms = set(big_idx.get_level_values(0).astype(str)) if isinstance(big_idx, pd.MultiIndex) else set(big_idx.astype(str))
 row_mask_big = sym_vec.isin(big_syms)
 
-# ===== 분석기간 결측 0개 종목만 =====
+
 ret_period = ret.loc[row_mask_big, cols_period]
 nobs = ret_period.notna().sum(axis=1)
 #final_idx = ret_period.index[nobs >= 2000]          # 예: 2940일 중 2000일 이상 관측
 
 miss_rate = ret_period.isna().mean(axis=1)          # 종목별 결측 비율
-final_idx = ret_period.index[miss_rate <= 0.2]      # 예: 결측 20% 이하면 유지
+final_idx = ret_period.index[miss_rate <= 0.05]
 
 
 # ===== 저장: 분석기간만 =====
