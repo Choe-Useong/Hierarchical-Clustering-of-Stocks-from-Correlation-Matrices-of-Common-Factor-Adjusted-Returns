@@ -8,7 +8,6 @@ FF_PATH   = r"C:\Users\working\Desktop\주식클러스터\items_parquet\ff_sheet
 OUT_DIR   = r"resid_fullperiod"
 OUT_RESID = r"resid_ff3_fullperiod.parquet"
 OUT_PARAM = r"ff3_alpha_beta_fullperiod.parquet"
-OUT_FILL  = r"ret_ff3fill_fullperiod.parquet"
 
 # 1) ret
 ret = pd.read_parquet(RET_PATH)
@@ -24,7 +23,7 @@ rm  = np.log(pd.to_numeric(ff["코스피"], errors="coerce")).diff()
 smb = np.log(pd.to_numeric(ff["Size & Book Value(2X3) SMB"], errors="coerce")).diff()
 hml = np.log(pd.to_numeric(ff["Size & Book Value(2X3) HML"], errors="coerce")).diff()
 
-F = pd.concat([rm.rename("rm"), smb.rename("SMB"), hml.rename("HML")], axis=1).dropna()
+F = pd.concat([rm.rename("rm"), smb.rename("SMB"), hml.rename("HML")], axis=1)
 
 # 3) 날짜 교집합 정합
 common = ret.columns.intersection(F.index)
@@ -40,8 +39,7 @@ def ff3_resid_alpha_beta_resid0(R, F_w, min_obs=60):
     F = F_w.loc[common]  # (T, K)
 
     # 결과: 원래 종목/날짜 유지
-    resid_df = pd.DataFrame(0.0, index=R.index, columns=common)  # 기본 0 (결측 잔차=0)
-
+    resid_df = pd.DataFrame(np.nan, index=R.index, columns=common)  
     K = F.shape[1]
     beta_cols = ["alpha"] + [f"beta_{c}" for c in F.columns] + ["nobs"]
     param_df = pd.DataFrame(np.nan, index=R.index, columns=beta_cols)
@@ -75,7 +73,7 @@ def ff3_resid_alpha_beta_resid0(R, F_w, min_obs=60):
     return resid_df, param_df
 
 # 사용
-resid, param = ff3_resid_alpha_beta_resid0(ret, F, min_obs=60)
+resid, param = ff3_resid_alpha_beta_resid0(ret, F, min_obs=252)
 
 # 4) 저장
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -84,25 +82,3 @@ param.to_parquet(os.path.join(OUT_DIR, OUT_PARAM), engine="pyarrow")
 
 print("resid:", resid.shape, "NaN:", int(resid.isna().sum().sum()))
 print("param:", param.shape)
-
-# === 원수익률 결측만 FF3로 채움 ===
-common = ret.columns.intersection(F.index)
-F_c = F.loc[common].dropna()
-ret_c = ret.loc[:, F_c.index]
-
-alpha = param["alpha"].values[:, None]  # (N,1)
-
-B = np.column_stack([
-    param[f"beta_{c}"].values for c in F_c.columns
-])  # (N,K)
-
-Rhat = alpha + (B @ F_c.values.T)  # (N,T)
-Rhat_df = pd.DataFrame(Rhat, index=ret.index, columns=F_c.index)
-
-ret_fill = ret_c.copy()
-ret_fill = ret_fill.combine_first(Rhat_df)  # ret의 NaN만 예측치로 채움
-
-print("ret_fill:", ret_fill.shape, "NaN:", int(ret_fill.isna().sum().sum()))
-
-# 저장
-ret_fill.to_parquet(os.path.join(OUT_DIR, OUT_FILL), engine="pyarrow")
