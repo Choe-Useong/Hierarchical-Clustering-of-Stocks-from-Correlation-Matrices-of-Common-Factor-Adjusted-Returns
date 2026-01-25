@@ -80,7 +80,7 @@ idx = np.argsort(w)[::-1]
 w2 = np.maximum(w[idx[:2]], 0.0)
 X2 = V[:, idx[:2]] * np.sqrt(w2)
 
-# ===== 4) leaf order heatmap (그대로 유지) =====
+# ===== 4) leaf order heatmap =====
 order_leaf = leaves_list(Z)
 C_ord = C[np.ix_(order_leaf, order_leaf)]
 lab_ord = lab[order_leaf]
@@ -108,73 +108,64 @@ fig.savefig(out_png, dpi=200, bbox_inches="tight")
 plt.show()
 print("saved:", out_png)
 
-# ===== 5) (이것만 남김) proximity-ordered discrete colors + legend도 색순 정렬 =====
+# ===== 5) proximity-ordered discrete colors + legend도 색순 정렬 =====
 vals = np.unique(lab)
 Kc = len(vals)
 
-if Kc < 2:
-    fig, ax = plt.subplots(figsize=(9, 7))
-    ax.scatter(X2[:, 0], X2[:, 1], s=16, alpha=0.85, linewidths=0)
-    ax.set_title("Only one cluster")
-    ax.set_xlabel("MDS-1"); ax.set_ylabel("MDS-2")
-    fig.tight_layout()
-    plt.show()
+# 1) 군집 중심(centroid)
+cent = np.vstack([X2[lab == c].mean(axis=0) for c in vals])  # (Kc,2)
 
-else:
-    # 1) 군집 중심(centroid)
-    cent = np.vstack([X2[lab == c].mean(axis=0) for c in vals])  # (Kc,2)
+# 2) centroid 거리행렬
+diff = cent[:, None, :] - cent[None, :, :]
+dist = np.sqrt((diff**2).sum(axis=2))
+np.fill_diagonal(dist, np.inf)
 
-    # 2) centroid 거리행렬
-    diff = cent[:, None, :] - cent[None, :, :]
-    dist = np.sqrt((diff**2).sum(axis=2))
-    np.fill_diagonal(dist, np.inf)
+# 3) kNN 그래프(대칭) + 라플라시안
+k_nn = min(10, Kc - 1)
+nn_idx = np.argsort(dist, axis=1)[:, :k_nn]
 
-    # 3) kNN 그래프(대칭) + 라플라시안
-    k_nn = min(10, Kc - 1)
-    nn_idx = np.argsort(dist, axis=1)[:, :k_nn]
+sigma = np.median(dist[np.isfinite(dist)])
+sigma = float(sigma) if np.isfinite(sigma) and sigma > 0 else 1.0
 
-    sigma = np.median(dist[np.isfinite(dist)])
-    sigma = float(sigma) if np.isfinite(sigma) and sigma > 0 else 1.0
+W = np.zeros((Kc, Kc), float)
+for i in range(Kc):
+    js = nn_idx[i]
+    W[i, js] = np.exp(-(dist[i, js]**2) / (2.0 * sigma**2 + 1e-12))
+W = np.maximum(W, W.T)
+L = np.diag(W.sum(axis=1)) - W
 
-    W = np.zeros((Kc, Kc), float)
-    for i in range(Kc):
-        js = nn_idx[i]
-        W[i, js] = np.exp(-(dist[i, js]**2) / (2.0 * sigma**2 + 1e-12))
-    W = np.maximum(W, W.T)
-    L = np.diag(W.sum(axis=1)) - W
+# 4) 스펙트럴 1D(근접 순서) 만들기
+ew, ev = np.linalg.eigh(L)
+nz = np.where(ew > 1e-12)[0]
+f = ev[:, nz[0]] if len(nz) else ev[:, 1]
 
-    # 4) 스펙트럴 1D(근접 순서) 만들기
-    ew, ev = np.linalg.eigh(L)
-    nz = np.where(ew > 1e-12)[0]
-    f = ev[:, nz[0]] if len(nz) else ev[:, 1]
+# 부호 고정(실행마다 색 순서 뒤집힘 방지)
+cc = np.corrcoef(f, cent[:, 0])[0, 1]
+if np.isfinite(cc) and cc < 0:
+    f = -f
 
-    # 부호 고정(실행마다 색 순서 뒤집힘 방지)
-    cc = np.corrcoef(f, cent[:, 0])[0, 1]
-    if np.isfinite(cc) and cc < 0:
-        f = -f
+order = np.argsort(f)
+vals_sorted = vals[order]  # 범례 정렬 기준(색=근접 순)
 
-    order = np.argsort(f)
-    vals_sorted = vals[order]  # 범례 정렬 기준(색=근접 순)
+# 5) 근접 순서대로 Kc개 색을 이산 샘플링해서 군집별 색 고유화
+base = plt.get_cmap("turbo")
+colors = base(np.linspace(0, 1, Kc))
+cid_to_color = {int(c): colors[i] for i, c in enumerate(vals_sorted)}
 
-    # 5) 근접 순서대로 Kc개 색을 이산 샘플링해서 군집별 색 고유화
-    base = plt.get_cmap("turbo")
-    colors = base(np.linspace(0, 1, Kc))
-    cid_to_color = {int(c): colors[i] for i, c in enumerate(vals_sorted)}
+point_colors = np.vstack([cid_to_color[int(c)] for c in lab])
 
-    point_colors = np.vstack([cid_to_color[int(c)] for c in lab])
+# 6) 산점도 + 범례(색순 정렬)
+fig, ax = plt.subplots(figsize=(9, 7))
+ax.scatter(X2[:, 0], X2[:, 1], c=point_colors, s=16, alpha=0.85, linewidths=0)
 
-    # 6) 산점도 + 범례(색순 정렬)
-    fig, ax = plt.subplots(figsize=(9, 7))
-    ax.scatter(X2[:, 0], X2[:, 1], c=point_colors, s=16, alpha=0.85, linewidths=0)
+handles = [Line2D([0],[0], marker='o', linestyle='None', markersize=7,
+                markerfacecolor=cid_to_color[int(c)], markeredgewidth=0)
+        for c in vals_sorted]
+ax.legend(handles, [f"c{int(c)}" for c in vals_sorted],
+        title=f"Clusters",
+        loc="center left", bbox_to_anchor=(1.02, 0.5))
 
-    handles = [Line2D([0],[0], marker='o', linestyle='None', markersize=7,
-                      markerfacecolor=cid_to_color[int(c)], markeredgewidth=0)
-               for c in vals_sorted]
-    ax.legend(handles, [f"c{int(c)}" for c in vals_sorted],
-              title=f"Clusters (color-ordered, K={Kc})",
-              loc="center left", bbox_to_anchor=(1.02, 0.5))
-
-    ax.set_title(f"Hierarchical Clusters (K={Kc}) - 2D (Classical MDS) [proximity colors + color-ordered legend]")
-    ax.set_xlabel("MDS-1"); ax.set_ylabel("MDS-2")
-    fig.tight_layout()
-    plt.show()
+ax.set_title(f"Hierarchical Clusters (K={Kc})")
+ax.set_xlabel("MDS-1"); ax.set_ylabel("MDS-2")
+fig.tight_layout()
+plt.show()
