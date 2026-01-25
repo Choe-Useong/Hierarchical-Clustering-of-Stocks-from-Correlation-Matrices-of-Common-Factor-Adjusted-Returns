@@ -25,6 +25,26 @@ hml = np.log(pd.to_numeric(ff["Size & Book Value(2X3) HML"], errors="coerce")).d
 
 F = pd.concat([rm.rename("rm"), smb.rename("SMB"), hml.rename("HML")], axis=1)
 
+# ===== rm에서 Rf 빼기 (rm -> Rm-Rf) =====
+RF_PATH  = "CD91.csv"
+DATE_COL = "date"     
+VAL_COL  = "cd91_y"   
+
+rf = pd.read_csv("CD91.csv").drop(columns=['원자료.1'])
+
+# 컬럼 정리 + 날짜/숫자 변환
+rf = rf.rename(columns={"변환": "date", "원자료": "cd91_y"})  # 필요 시 컬럼명 확인해서 맞춰
+rf["date"] = pd.to_datetime(rf["date"], errors="coerce")
+rf["cd91_y"] = pd.to_numeric(rf["cd91_y"], errors="coerce")
+
+rf = rf.dropna(subset=["date", "cd91_y"]).sort_values("date").set_index("date")
+
+# 연율(%) -> 일별 로그수익률로 환산
+rf_daily_log = np.log1p(rf["cd91_y"] / 100.0) / 252.0
+rf_daily_log.name = "rf"
+
+F["rm"] = F["rm"] - rf_daily_log.reindex(F.index).ffill()
+
 # 3) 날짜 교집합 정합
 common = ret.columns.intersection(F.index)
 ret = ret.loc[:, common]
