@@ -13,7 +13,6 @@ LINK = "ward"   # single/complete/average/ward
 K = 25          # 군집 개수
 
 # ===== 1) corr / distance / hierarchical clustering =====
-# ===== 1) corr / distance / hierarchical clustering =====
 resid = pd.read_parquet(CORR_PATH).astype(float)
 
 # (선택) 날짜가 전부 NaN인 열만 제거
