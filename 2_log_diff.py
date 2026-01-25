@@ -34,7 +34,7 @@ rf["cd91_y"] = pd.to_numeric(rf["cd91_y"], errors="coerce")
 rf = rf.dropna(subset=["date", "cd91_y"]).sort_values("date").set_index("date")
 
 # 연율(%) -> 일별 로그수익률로 환산
-rf_daily_log = np.log1p((rf["cd91_y"] / 100.0) / 252.0)
+rf_daily_log = np.log1p(rf["cd91_y"] / 100.0) / 252.0
 rf_daily_log.name = "rf"
 
 # 초과수익률 계산
