@@ -4,28 +4,28 @@ import pandas as pd
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import linkage, fcluster
 
-
 # 1. Configuration & Path Settings
 
 BASE_DIR = "/content/drive/MyDrive/HC"
 RESID_FILE = "/content/drive/MyDrive/HC/resid_fullperiod"
 SECTOR_FILE = "/content/drive/MyDrive/HC/items_parquet"
 
-# Ensure paths are correct
+# Ensure paths are correct using os.path.join
 RESID_PATH = os.path.join(BASE_DIR, RESID_FILE)
 SECTOR_PATH = os.path.join(BASE_DIR, SECTOR_FILE)
 
 # Clustering Hyperparameters
-LINK_METHOD = "ward"   # Linkage method
+LINK_METHOD = "ward"   # Linkage method for hierarchical clustering
 K_VALUE = 30           # Number of clusters (Aligned with KOSPI major sectors)
 MIN_PERIODS = 0
 
-print(">>> [Start Analysis] Loading data and setting up environment...")
+print("[INFO] Loading data and setting up environment...")
 print(f" - Residual File Path: {RESID_PATH}")
 print(f" - Sector File Path:   {SECTOR_PATH}")
 
 
 # 2. Utility Functions
+
 
 def normalize_code(key):
     """
@@ -47,7 +47,7 @@ def load_parquet_robust(path):
     if os.path.exists(path):
         return pd.read_parquet(path)
     elif os.path.exists(path + ".parquet"):
-        print(f"ℹ️ Appending extension to load: {path}.parquet")
+        print(f"[INFO] Appending extension to load: {path}.parquet")
         return pd.read_parquet(path + ".parquet")
     else:
         return None
@@ -55,12 +55,13 @@ def load_parquet_robust(path):
 
 # 3. Data Loading & Preprocessing
 
+
 # 3.1 Load Data Files
 resid = load_parquet_robust(RESID_PATH)
 sector_df = load_parquet_robust(SECTOR_PATH)
 
 if resid is None or sector_df is None:
-    print("❌ [Error] Required data files not found. Please check the paths.")
+    print("[ERROR] Required data files not found. Please check the paths.")
     exit()
 
 # 3.2 Preprocess Residual Data
@@ -99,7 +100,7 @@ resid_map = {normalize_code(c): c for c in resid.columns}
 stock_names = {normalize_code(c): str(c[1]) if isinstance(c, tuple) else str(c) for c in resid.columns}
 sector_map = {normalize_code(i): str(v) for i, v in raw_sector.items()}
 
-# ★ [Data Refinement] Manual Sector Updates for Qualitative Analysis
+# [Data Refinement] Manual Sector Updates for Qualitative Analysis
 # Updates missing or 'None' sectors for key analysis targets to ensure report quality.
 # (Keys are kept in Korean to match raw data, Values translated to English for reporting)
 manual_sector_updates = {
@@ -130,7 +131,7 @@ for name, sector in manual_sector_updates.items():
 
 # Extract Common Stocks
 common_codes = sorted(list(set(resid_map.keys()) & set(stock_names.keys())))
-print(f"✅ Preprocessing Complete. Number of Analyzed Stocks: {len(common_codes)}")
+print(f"[INFO] Preprocessing Complete. Number of Analyzed Stocks: {len(common_codes)}")
 
 # Align Dataframes
 resid_final = resid[[resid_map[c] for c in common_codes]]
@@ -140,7 +141,8 @@ final_sectors = [sector_map.get(c, "Unknown") for c in common_codes]
 
 # 4. Clustering (Hierarchical / Ward)
 
-print(f">>> Performing Clustering (K={K_VALUE}, Method={LINK_METHOD})...")
+
+print(f"[INFO] Performing Clustering (K={K_VALUE}, Method={LINK_METHOD})...")
 
 # Calculate Distance Matrix (based on Pearson Correlation)
 C = resid_final.corr().to_numpy()
@@ -163,8 +165,9 @@ df_res = pd.DataFrame({
 
 # 5. Qualitative Analysis Report
 
+
 print("\n" + "="*80)
-print("★ [Qualitative Analysis] Key Clustering Cases")
+print("[Qualitative Analysis] Key Clustering Cases")
 print("="*80)
 
 # [Case 1] Event Synchronization (SG Securities Crash)
@@ -181,7 +184,7 @@ if mask_sg.any():
     print(f" {'[Stock Name]':<15} | {'[Official Sector]':<20}")
     print("-" * 65)
     for _, row in members.iterrows():
-        mark = "★" if row["Name"] in targets_sg else " "
+        mark = "*" if row["Name"] in targets_sg else " "
         sec = row['Sector'] if row['Sector'] is not None else "Unknown"
         print(f" {mark} {row['Name']:<13} | {sec:<20}")
 else:
@@ -199,7 +202,7 @@ if target_kb in df_res["Name"].values:
     
     # Target Stock
     row = members[members["Name"] == target_kb].iloc[0]
-    print(f" ★ {row['Name']:<13} | {row['Sector']:<20}")
+    print(f" * {row['Name']:<13} | {row['Sector']:<20}")
     
     # Peers
     print(" ... (Peers in the same cluster) ...")
@@ -226,6 +229,6 @@ for cid in sorted(df_res["Cluster"].unique()):
     if ratio > 0.6:
         mismatches = group[(group["Sector"] != top_sector) & (group["Sector"] != "Unknown")]
         if not mismatches.empty:
-            print(f"\n ▶ Cluster {cid} (Dominant: {top_sector}, Share: {ratio:.1%})")
+            print(f"\n > Cluster {cid} (Dominant: {top_sector}, Share: {ratio:.1%})")
             for _, row in mismatches.head(3).iterrows():
                 print(f"   - {row['Name']} (Official: {row['Sector']})")
